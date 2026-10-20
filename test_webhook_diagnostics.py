@@ -166,4 +166,3 @@ def test_background_processing_failure_is_logged_after_webhook_ack(capsys):
     assert "private processing details" not in json.dumps(record)
     assert "+15551234567" not in json.dumps(record)
     assert "private message text" not in json.dumps(record)
-
