@@ -128,6 +128,14 @@ def create_app(agent: Agent, signing_secret: str = None):
             resource = payload
         event_type = (payload.get("type") or payload.get("event")
                       or request.headers.get("X-Blooio-Event", ""))
+        if not isinstance(event_type, str) or not event_type.strip():
+            _log_provider_event(
+                event_type="webhook.invalid", outcome="event_type_missing",
+                event_id=payload.get("id") or payload.get("event_id", ""),
+                delivery_id=delivery_id, api_version=api_version,
+                http_status=400, retry_action="provider_retry_requested")
+            return jsonify({"error": "Event type is required"}), 400
+        event_type = event_type.strip()
         event_id = payload.get("id") or payload.get("event_id") or ""
         message_id = (resource.get("message_id") or payload.get("message_id")
                       or request.headers.get("X-Blooio-Message-Id", ""))
@@ -152,6 +160,14 @@ def create_app(agent: Agent, signing_secret: str = None):
         if event_type.startswith("message.") and event_type != "message.received":
             _log_provider_event(
                 event_type=event_type, outcome="lifecycle_event_ignored",
+                event_id=event_id, message_id=message_id, delivery_id=delivery_id,
+                api_version=event_api_version, status=status, http_status=200,
+                retry_action="acknowledged_2xx_no_app_retry")
+            return jsonify({"status": "ignored"}), 200
+
+        if event_type != "message.received":
+            _log_provider_event(
+                event_type=event_type, outcome="unsupported_event_ignored",
                 event_id=event_id, message_id=message_id, delivery_id=delivery_id,
                 api_version=event_api_version, status=status, http_status=200,
                 retry_action="acknowledged_2xx_no_app_retry")

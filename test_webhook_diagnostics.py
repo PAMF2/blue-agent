@@ -132,6 +132,49 @@ def test_lifecycle_event_is_acknowledged_without_agent_or_message_data(agent, ca
     assert record["outcome"] == "lifecycle_event_ignored"
 
 
+def test_non_message_event_with_text_fields_is_ignored_not_queued(
+        monkeypatch, tmp_path, capsys):
+    agent = server.Agent(system_prompt="test", db_path=str(tmp_path / "agent.db"))
+    processed = []
+    monkeypatch.setattr(server, "_process",
+                        lambda _agent, phone, text, *_: processed.append((phone, text)))
+    client = create_app(agent, SECRET).test_client()
+
+    response = post_signed(client, {
+        "id": "evt_contact_updated",
+        "type": "contact.updated",
+        "data": {"sender": "+15551234567", "text": "not an inbound message"},
+    })
+
+    assert response.status_code == 200
+    assert response.json == {"status": "ignored"}
+    assert agent.get_status()["queue_pending"] == 0
+    assert processed == []
+    record = json.loads(capsys.readouterr().out.removeprefix("provider_event="))
+    assert record["outcome"] == "unsupported_event_ignored"
+
+
+def test_missing_event_type_is_rejected_without_queueing(
+        monkeypatch, tmp_path, capsys):
+    agent = server.Agent(system_prompt="test", db_path=str(tmp_path / "agent.db"))
+    processed = []
+    monkeypatch.setattr(server, "_process",
+                        lambda _agent, phone, text, *_: processed.append((phone, text)))
+    client = create_app(agent, SECRET).test_client()
+
+    response = post_signed(client, {
+        "id": "evt_missing_type",
+        "data": {"sender": "+15551234567", "text": "not classified"},
+    })
+
+    assert response.status_code == 400
+    assert agent.get_status()["queue_pending"] == 0
+    assert processed == []
+    record = json.loads(capsys.readouterr().out.removeprefix("provider_event="))
+    assert record["outcome"] == "event_type_missing"
+    assert record["retry_action"] == "provider_retry_requested"
+
+
 def test_database_queue_failure_is_logged_and_returns_retryable_status(capsys):
     class BrokenQueueAgent(FakeAgent):
         def _get_conn(self):
