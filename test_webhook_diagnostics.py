@@ -158,11 +158,14 @@ def test_background_processing_failure_is_logged_after_webhook_ack(capsys):
         def run(self, phone, text):
             raise RuntimeError("private processing details")
 
-    _process(BrokenAgent(), "+15551234567", "private message text")
+    _process(BrokenAgent(), "+15551234567", "private message text",
+             event_id="evt_process_123", message_id="msg_process_123")
 
     record = json.loads(capsys.readouterr().out.removeprefix("provider_event="))
     assert record["outcome"] == "failed"
     assert record["error_code"] == "processing_exception"
+    assert record["event_id"] == "evt_process_123"
+    assert record["message_id"] == "msg_process_123"
     assert record["retry_action"] == "provider_already_acknowledged"
     assert "private processing details" not in json.dumps(record)
     assert "+15551234567" not in json.dumps(record)
@@ -174,7 +177,7 @@ def test_blooio_retry_of_inbound_event_does_not_queue_or_process_twice(
     agent = server.Agent(system_prompt="test", db_path=str(tmp_path / "agent.db"))
     processed = []
     monkeypatch.setattr(server, "_process",
-                        lambda _agent, phone, text: processed.append((phone, text)))
+                        lambda _agent, phone, text, *_: processed.append((phone, text)))
 
     class ImmediateThread:
         def __init__(self, target, args, daemon):

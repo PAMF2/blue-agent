@@ -239,7 +239,10 @@ def create_app(agent: Agent, signing_secret: str = None):
                 conn.close()
 
         # Process in background thread (don't block webhook response)
-        threading.Thread(target=_process, args=(agent, phone, text), daemon=True).start()
+        threading.Thread(
+            target=_process,
+            args=(agent, phone, text, event_id, message_id), daemon=True
+        ).start()
 
         _log_provider_event(
             event_type=event_type or "message.received", outcome="inbound_queued",
@@ -270,7 +273,8 @@ def create_app(agent: Agent, signing_secret: str = None):
     return app
 
 
-def _process(agent: Agent, phone: str, text: str):
+def _process(agent: Agent, phone: str, text: str, event_id: str = "",
+             message_id: str = ""):
     """Process an inbound message in a background thread."""
     try:
         response = agent.run(phone, text)
@@ -284,6 +288,7 @@ def _process(agent: Agent, phone: str, text: str):
     except Exception as e:
         _log_provider_event(
             event_type="inbound.process", outcome="failed",
+            event_id=event_id, message_id=message_id,
             error_code="processing_exception", http_status=500,
             retry_action="provider_already_acknowledged")
 
