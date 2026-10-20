@@ -5,7 +5,7 @@ import time
 
 import pytest
 
-from server import create_app
+from server import _process, create_app
 
 
 SECRET = "test-signing-secret"
@@ -83,6 +83,7 @@ def test_missing_or_invalid_signature_is_rejected_and_logged(agent, capsys):
     record = json.loads(capsys.readouterr().out.removeprefix("provider_event="))
     assert record["outcome"] == "rejected"
     assert record["error_code"] == "signature_malformed"
+    assert record["retry_action"] == "provider_retry_requested"
 
 
 def test_missing_signing_secret_fails_closed_and_is_logged(agent, capsys):
@@ -91,6 +92,7 @@ def test_missing_signing_secret_fails_closed_and_is_logged(agent, capsys):
     assert response.status_code == 503
     record = json.loads(capsys.readouterr().out.removeprefix("provider_event="))
     assert record["outcome"] == "secret_missing"
+    assert record["retry_action"] == "provider_retry_requested"
 
 
 def test_v2_failed_event_is_logged_without_routing_to_agent(agent, capsys):
@@ -145,6 +147,23 @@ def test_database_queue_failure_is_logged_and_returns_retryable_status(capsys):
     record = json.loads(capsys.readouterr().out.removeprefix("provider_event="))
     assert record["outcome"] == "queue_failed"
     assert record["error_code"] == "webhook_queue_failed"
+    assert record["retry_action"] == "provider_retry_requested"
     assert "+15551234567" not in json.dumps(record)
     assert "database error" not in json.dumps(record)
+
+
+def test_background_processing_failure_is_logged_after_webhook_ack(capsys):
+    class BrokenAgent(FakeAgent):
+        def run(self, phone, text):
+            raise RuntimeError("private processing details")
+
+    _process(BrokenAgent(), "+15551234567", "private message text")
+
+    record = json.loads(capsys.readouterr().out.removeprefix("provider_event="))
+    assert record["outcome"] == "failed"
+    assert record["error_code"] == "processing_exception"
+    assert record["retry_action"] == "provider_already_acknowledged"
+    assert "private processing details" not in json.dumps(record)
+    assert "+15551234567" not in json.dumps(record)
+    assert "private message text" not in json.dumps(record)
 

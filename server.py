@@ -96,7 +96,8 @@ def create_app(agent: Agent, signing_secret: str = None):
         if not signing_secret:
             _log_provider_event(
                 event_type="webhook.authentication", outcome="secret_missing",
-                delivery_id=delivery_id, api_version=api_version, http_status=503)
+                delivery_id=delivery_id, api_version=api_version, http_status=503,
+                retry_action="provider_retry_requested")
             return jsonify({"error": "Webhook signing secret is not configured"}), 503
         is_valid, signature_error = _verify_blooio_signature(
             raw_body, request.headers.get("X-Blooio-Signature", ""), signing_secret)
@@ -104,7 +105,8 @@ def create_app(agent: Agent, signing_secret: str = None):
             _log_provider_event(
                 event_type="webhook.authentication", outcome="rejected",
                 delivery_id=delivery_id, api_version=api_version,
-                error_code=signature_error, http_status=401)
+                error_code=signature_error, http_status=401,
+                retry_action="provider_retry_requested")
             return jsonify({"error": "Invalid signature"}), 401
 
         payload = request.get_json(silent=True)
@@ -112,7 +114,7 @@ def create_app(agent: Agent, signing_secret: str = None):
             _log_provider_event(
                 event_type="webhook.invalid", outcome="invalid_json",
                 delivery_id=delivery_id, api_version=api_version,
-                http_status=400)
+                http_status=400, retry_action="provider_retry_requested")
             return jsonify({"error": "No data"}), 400
 
         resource = payload.get("data")
@@ -137,7 +139,7 @@ def create_app(agent: Agent, signing_secret: str = None):
                 error_code=(error.get("code") or error.get("error_code")
                             or resource.get("error_code") or payload.get("error_code", "")),
                 http_status=200,
-                retry_action="acknowledged_no_retry")
+                retry_action="acknowledged_2xx_no_app_retry")
             return jsonify({"status": "recorded"}), 200
 
         # Do not send Blooio lifecycle events to the conversational agent.
@@ -145,7 +147,8 @@ def create_app(agent: Agent, signing_secret: str = None):
             _log_provider_event(
                 event_type=event_type, outcome="lifecycle_event_ignored",
                 event_id=event_id, message_id=message_id, delivery_id=delivery_id,
-                api_version=event_api_version, status=status, http_status=200)
+                api_version=event_api_version, status=status, http_status=200,
+                retry_action="acknowledged_2xx_no_app_retry")
             return jsonify({"status": "ignored"}), 200
 
         # Extract inbound message fields from v2 flat or v4 envelope payloads.
@@ -162,7 +165,8 @@ def create_app(agent: Agent, signing_secret: str = None):
             _log_provider_event(
                 event_type=event_type or "message", outcome="outbound_ignored",
                 event_id=event_id, message_id=message_id, delivery_id=delivery_id,
-                api_version=event_api_version, status=status, http_status=200)
+                api_version=event_api_version, status=status, http_status=200,
+                retry_action="acknowledged_2xx_no_app_retry")
             return jsonify({"status": "skipped", "reason": "outbound"})
 
         if not phone or not text:
@@ -170,7 +174,8 @@ def create_app(agent: Agent, signing_secret: str = None):
             _log_provider_event(
                 event_type=event_type or "message", outcome=reason,
                 event_id=event_id, message_id=message_id, delivery_id=delivery_id,
-                api_version=event_api_version, status=status, http_status=200)
+                api_version=event_api_version, status=status, http_status=200,
+                retry_action="acknowledged_2xx_no_app_retry")
             return jsonify({"status": "skipped", "reason": "missing phone or text"})
 
         phone = BlooioClient.format_phone(phone)
@@ -202,7 +207,8 @@ def create_app(agent: Agent, signing_secret: str = None):
         _log_provider_event(
             event_type=event_type or "message.received", outcome="inbound_queued",
             event_id=event_id, message_id=message_id, delivery_id=delivery_id,
-            api_version=event_api_version, status=status, http_status=200)
+            api_version=event_api_version, status=status, http_status=200,
+            retry_action="acknowledged_2xx_no_app_retry")
 
         return jsonify({"status": "queued"})
 
@@ -241,8 +247,8 @@ def _process(agent: Agent, phone: str, text: str):
     except Exception as e:
         _log_provider_event(
             event_type="inbound.process", outcome="failed",
-            error_code="processing_exception",
-            error_message=type(e).__name__, http_status=500)
+            error_code="processing_exception", http_status=500,
+            retry_action="provider_already_acknowledged")
 
 
 def main():
