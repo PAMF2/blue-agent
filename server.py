@@ -118,9 +118,11 @@ def create_app(agent: Agent, signing_secret: str = None):
         resource = payload.get("data")
         if not isinstance(resource, dict):
             resource = payload
-        event_type = payload.get("type") or payload.get("event") or ""
+        event_type = (payload.get("type") or payload.get("event")
+                      or request.headers.get("X-Blooio-Event", ""))
         event_id = payload.get("id") or payload.get("event_id") or ""
-        message_id = resource.get("message_id") or payload.get("message_id") or ""
+        message_id = (resource.get("message_id") or payload.get("message_id")
+                      or request.headers.get("X-Blooio-Message-Id", ""))
         event_api_version = payload.get("api_version") or api_version
         error = resource.get("error") or payload.get("error") or {}
         if not isinstance(error, dict):
@@ -132,7 +134,9 @@ def create_app(agent: Agent, signing_secret: str = None):
                 event_type=event_type or "message.failed", outcome="delivery_failed",
                 event_id=event_id, message_id=message_id, delivery_id=delivery_id,
                 api_version=event_api_version, status=status or "failed",
-                error_code=error.get("code", ""), http_status=200,
+                error_code=(error.get("code") or error.get("error_code")
+                            or resource.get("error_code") or payload.get("error_code", "")),
+                http_status=200,
                 retry_action="acknowledged_no_retry")
             return jsonify({"status": "recorded"}), 200
 

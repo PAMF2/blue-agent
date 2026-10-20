@@ -39,6 +39,8 @@ def post_signed(client, payload, timestamp=None):
         headers={
             "X-Blooio-Signature": signed_header(body, timestamp),
             "X-Blooio-Delivery": "delivery_abc123",
+            "X-Blooio-Event": payload.get("type") or payload.get("event", ""),
+            "X-Blooio-Message-Id": payload.get("message_id", ""),
             "X-Blooio-Version": "2026-10-01",
         },
     )
@@ -95,16 +97,21 @@ def test_v2_failed_event_is_logged_without_routing_to_agent(agent, capsys):
     client = create_app(agent, SECRET).test_client()
     response = post_signed(client, {
         "event": "message.failed",
+        "status": "failed",
         "message_id": "msg_v2abc",
-        "error": {"code": "30007", "message": "Message filtered by carrier"},
+        "error_code": "device_send_error",
+        "error_message": "Private text from Jane Doe",
+        "text": "Private message content",
     })
 
     assert response.status_code == 200
     assert agent.calls == []
     record = json.loads(capsys.readouterr().out.removeprefix("provider_event="))
-    assert record["error_code"] == "30007"
+    assert record["error_code"] == "device_send_error"
     assert record["message_id"] == "msg_v2abc"
     assert "error_message" not in record
+    assert "Private message content" not in json.dumps(record)
+    assert "Jane Doe" not in json.dumps(record)
 
 
 def test_lifecycle_event_is_acknowledged_without_agent_or_message_data(agent, capsys):
