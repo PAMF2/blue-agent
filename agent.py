@@ -102,6 +102,12 @@ class Agent:
             );
             CREATE INDEX IF NOT EXISTS idx_queue_pending ON message_queue(processed, phone);
 
+            CREATE TABLE IF NOT EXISTS webhook_event_receipts (
+                event_key TEXT PRIMARY KEY,
+                event_type TEXT NOT NULL,
+                created_at TEXT NOT NULL
+            );
+
             CREATE TABLE IF NOT EXISTS config (
                 key TEXT PRIMARY KEY,
                 value TEXT NOT NULL

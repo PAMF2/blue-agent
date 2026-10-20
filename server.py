@@ -25,6 +25,7 @@ from blooio import BlooioClient
 
 
 _SAFE_ID = re.compile(r"^[A-Za-z0-9_.:-]{1,120}$")
+_API_VERSION = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 _PHONE_LIKE = re.compile(r"(?<!\d)\+?\d[\d\s().-]{7,}\d(?!\d)")
 
 
@@ -33,6 +34,11 @@ def _safe_id(value):
     if not _SAFE_ID.fullmatch(value) or _PHONE_LIKE.search(value):
         return ""
     return value
+
+
+def _safe_api_version(value):
+    value = str(value or "")
+    return value if _API_VERSION.fullmatch(value) else _safe_id(value)
 
 
 def _log_provider_event(*, event_type, outcome, event_id="", message_id="",
@@ -47,7 +53,7 @@ def _log_provider_event(*, event_type, outcome, event_id="", message_id="",
         "event_id": _safe_id(event_id),
         "message_id": _safe_id(message_id),
         "delivery_id": _safe_id(delivery_id),
-        "api_version": _safe_id(api_version),
+        "api_version": _safe_api_version(api_version),
         "status": _safe_id(status),
         "error_code": _safe_id(error_code),
         "http_status": http_status,
@@ -180,15 +186,46 @@ def create_app(agent: Agent, signing_secret: str = None):
 
         phone = BlooioClient.format_phone(phone)
 
+        # Blooio retries deliveries and can replay the same event. Persist a
+        # one-way event key in the same transaction as the queue insert so a
+        # retry cannot enqueue or process the inbound message twice.
+        event_identity = event_id or message_id or delivery_id
+        if not event_identity:
+            _log_provider_event(
+                event_type=event_type or "message.received",
+                outcome="event_identity_missing", http_status=503,
+                error_code="webhook_event_identity_missing",
+                retry_action="provider_retry_requested")
+            return jsonify({"error": "Webhook event identity is missing"}), 503
+        event_key = hashlib.sha256(
+            f"{event_type}\0{event_identity}".encode("utf-8")
+        ).hexdigest()
+
         # Enqueue
         conn = None
         try:
             conn = agent._get_conn()
+            receipt = conn.execute(
+                "INSERT OR IGNORE INTO webhook_event_receipts "
+                "(event_key, event_type, created_at) VALUES (?, ?, ?)",
+                (event_key, event_type or "message.received", agent._now()))
+            if receipt.rowcount == 0:
+                conn.rollback()
+                _log_provider_event(
+                    event_type=event_type or "message.received",
+                    outcome="duplicate_ignored", event_id=event_id,
+                    message_id=message_id, delivery_id=delivery_id,
+                    api_version=event_api_version, status=status,
+                    http_status=200,
+                    retry_action="acknowledged_2xx_duplicate")
+                return jsonify({"status": "duplicate"}), 200
             conn.execute(
                 "INSERT INTO message_queue (phone, text, direction, created_at) VALUES (?, ?, ?, ?)",
                 (phone, text, "inbound", agent._now()))
             conn.commit()
         except Exception as exc:
+            if conn is not None:
+                conn.rollback()
             _log_provider_event(
                 event_type=event_type or "message.received", outcome="queue_failed",
                 event_id=event_id, message_id=message_id, delivery_id=delivery_id,

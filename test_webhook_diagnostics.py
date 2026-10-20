@@ -5,6 +5,7 @@ import time
 
 import pytest
 
+import server
 from server import _process, create_app
 
 
@@ -166,3 +167,47 @@ def test_background_processing_failure_is_logged_after_webhook_ack(capsys):
     assert "private processing details" not in json.dumps(record)
     assert "+15551234567" not in json.dumps(record)
     assert "private message text" not in json.dumps(record)
+
+
+def test_blooio_retry_of_inbound_event_does_not_queue_or_process_twice(
+        monkeypatch, tmp_path, capsys):
+    agent = server.Agent(system_prompt="test", db_path=str(tmp_path / "agent.db"))
+    processed = []
+    monkeypatch.setattr(server, "_process",
+                        lambda _agent, phone, text: processed.append((phone, text)))
+
+    class ImmediateThread:
+        def __init__(self, target, args, daemon):
+            self.target = target
+            self.args = args
+
+        def start(self):
+            self.target(*self.args)
+
+    monkeypatch.setattr(server.threading, "Thread", ImmediateThread)
+    client = server.create_app(agent, SECRET).test_client()
+    payload = {
+        "id": "evt_retry_123",
+        "type": "message.received",
+        "api_version": "2026-10-01",
+        "data": {
+            "message_id": "msg_retry_123",
+            "sender": "+15551234567",
+            "text": "private inbound content",
+        },
+    }
+
+    first = post_signed(client, payload)
+    duplicate = post_signed(client, payload)
+
+    assert first.status_code == 200
+    assert first.json == {"status": "queued"}
+    assert duplicate.status_code == 200
+    assert duplicate.json == {"status": "duplicate"}
+    assert agent.get_status()["queue_pending"] == 1
+    assert processed == [("+15551234567", "private inbound content")]
+    record = json.loads(capsys.readouterr().out.splitlines()[-1].removeprefix("provider_event="))
+    assert record["outcome"] == "duplicate_ignored"
+    assert record["api_version"] == "2026-10-01"
+    assert "private inbound content" not in json.dumps(record)
+    assert "+15551234567" not in json.dumps(record)
