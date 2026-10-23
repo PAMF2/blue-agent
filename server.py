@@ -61,14 +61,15 @@ def create_app(agent: Agent, signing_secret: str = None):
 
         # Enqueue
         conn = agent._get_conn()
-        conn.execute(
+        queue_result = conn.execute(
             "INSERT INTO message_queue (phone, text, direction, created_at) VALUES (?, ?, ?, ?)",
             (phone, text, "inbound", agent._now()))
+        queue_id = queue_result.lastrowid
         conn.commit()
         conn.close()
 
         # Process in background thread (don't block webhook response)
-        threading.Thread(target=_process, args=(agent, phone, text), daemon=True).start()
+        threading.Thread(target=_process, args=(agent, phone, text, queue_id), daemon=True).start()
 
         return jsonify({"status": "queued"})
 
@@ -93,7 +94,7 @@ def create_app(agent: Agent, signing_secret: str = None):
     return app
 
 
-def _process(agent: Agent, phone: str, text: str):
+def _process(agent: Agent, phone: str, text: str, queue_id: int):
     """Process an inbound message in a background thread."""
     try:
         response = agent.run(phone, text)
@@ -101,7 +102,9 @@ def _process(agent: Agent, phone: str, text: str):
             agent.send_reply(phone, response)
 
         conn = agent._get_conn()
-        conn.execute("UPDATE message_queue SET processed = 1 WHERE phone = ? AND processed = 0", (phone,))
+        conn.execute(
+            "UPDATE message_queue SET processed = 1 WHERE id = ? AND processed = 0",
+            (queue_id,))
         conn.commit()
         conn.close()
     except Exception as e:

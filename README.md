@@ -118,6 +118,11 @@ app.run(port=8787)
 5. **Response sent** via Blooio — split on `---` with natural delays
 6. **State saved** — conversation history + any profile updates
 
+Each inbound message has its own SQLite queue ID, passed to its background
+processor. After processing and any reply send return without an exception,
+only that queue row is marked processed; other pending messages from the same
+phone remain pending.
+
 ## License
 
 MIT
